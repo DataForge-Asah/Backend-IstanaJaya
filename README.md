@@ -3,7 +3,7 @@
 Backend REST API untuk proyek Capstone **Asah 2026 (Tim A26-CS182 — DataForge)**:  
 **Digitalisasi Pencatatan dan Pemantauan Stok Barang pada Toko Istana Jaya Elektronik**.
 
-Dokumen ini menjadi acuan utama (*single source of truth*) untuk struktur database, relasi antar tabel, aturan bisnis stok, pemetaan dataset dari tim Data Science, serta panduan migrasi awal di **Laravel 13 + MariaDB/MySQL**.
+Dokumen ini menjadi acuan utama (*single source of truth*) untuk struktur database, relasi antar tabel, aturan bisnis stok, pemetaan dataset dari tim Data Science, serta panduan migrasi awal di **Laravel 13 + MySQL**.
 
 ---
 
