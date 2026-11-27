@@ -270,4 +270,167 @@ php artisan migrate:fresh --seed
 
 # 4. Verifikasi status tabel
 php artisan migrate:status
+
+# 5. Jalankan server API lokal
+php artisan serve --host=127.0.0.1 --port=8000
+```
+
+---
+
+## 8. Spesifikasi REST API (`/api/v1/...`)
+
+- **Base URL Lokal:** `http://127.0.0.1:8000/api/v1`
+- **Format:** JSON (`Accept: application/json`, `Content-Type: application/json`)
+- **Mode MVP (Auth Opsional):** Seluruh endpoint inventaris, kategori, dashboard, stok, dan AI dapat diakses langsung tanpa login. Jika frontend mengirim header `Authorization: Bearer <token>`, `user_id` otomatis dicatat pada `stock_logs`.
+
+### 8.1. Health & Dashboard
+| Method | Endpoint | Keterangan |
+| :--- | :--- | :--- |
+| `GET` | `/api/v1/health` | Cek status kesehatan API |
+| `GET` | `/api/v1/dashboard/summary` | Ringkasan total produk, total qty, distribusi status (`AMAN`/`MENIPIS`/`HABIS`), jumlah `needs_stock_check`, breakdown per kategori, dan 10 riwayat stok terbaru |
+
+### 8.2. Master Kategori (`categories`)
+| Method | Endpoint | Keterangan |
+| :--- | :--- | :--- |
+| `GET` | `/api/v1/categories` | Daftar seluruh kategori (+ `products_count` & `total_qty`). Mendukung `?search=` |
+| `POST` | `/api/v1/categories` | Tambah kategori baru (`code`, `name`) |
+| `GET` | `/api/v1/categories/{id}` | Detail kategori |
+| `PUT/PATCH` | `/api/v1/categories/{id}` | Perbarui kategori |
+| `DELETE` | `/api/v1/categories/{id}` | Hapus kategori (HTTP `409` jika masih dipakai produk) |
+
+### 8.3. Katalog & Pencarian Produk (`products`)
+| Method | Endpoint | Keterangan |
+| :--- | :--- | :--- |
+| `GET` | `/api/v1/products` | Daftar produk terpaginasi dengan pencarian & filter |
+| `GET` | `/api/v1/products/lookup?code=...` | Pencarian instan exact match by `barcode` atau `kode_barang` (cocok untuk barcode scanner) |
+| `POST` | `/api/v1/products` | Tambah produk baru (otomatis pad `kode_barang` 8 digit & catat `stock_logs` awal jika `qty > 0`) |
+| `GET` | `/api/v1/products/{id}` | Detail produk beserta kategori, 20 `stock_logs` terbaru, dan 10 `ai_logs` terbaru |
+| `PUT/PATCH` | `/api/v1/products/{id}` | Perbarui metadata produk (bukan perubahan stok) |
+| `DELETE` | `/api/v1/products/{id}` | Soft-deactivate produk (`is_active = false`) |
+
+**Query Parameters `GET /api/v1/products`:**
+- `search` — cari di `nama_barang`, `kode_barang`, `barcode`, atau `lokasi_rak`
+- `category_id` / `category_code` — filter berdasarkan ID atau kode kategori (`BL`, `CA`, `KS`, `KA`, `MT`, `PP`, `LM`)
+- `dept` — filter departemen kasir (`BB`, `BR`, `LP`, `AL`, `PKJ`)
+- `status` — filter status stok: `HABIS`, `MENIPIS`, atau `AMAN`
+- `needs_stock_check` — `true` atau `false`
+- `is_active` — `true` (default), `false`, atau `all`
+- `sort_by` — `nama_barang` (default), `kode_barang`, `harga`, `qty`, `updated_at`, `created_at`
+- `sort_dir` — `asc` (default) atau `desc`
+- `per_page` — jumlah data per halaman (default `15`, maks `100`)
+
+**Contoh Request `POST /api/v1/products`:**
+```json
+{
+  "kode_barang": "00009901",
+  "nama_barang": "BOLA LAMPU LED 12W PUTIH",
+  "category_id": 1,
+  "dept": "LP",
+  "barcode": "8990100999001",
+  "harga": 28000,
+  "qty": 20,
+  "satuan": "pcs",
+  "min_stock": 5,
+  "lokasi_rak": "RAK-A1",
+  "deskripsi": "Lampu LED hemat energi 12W cahaya putih."
+}
+```
+
+### 8.4. Pergerakan & Riwayat Stok (`stock_logs`)
+| Method | Endpoint | Keterangan |
+| :--- | :--- | :--- |
+| `POST` | `/api/v1/products/{id}/stock` | Update stok atomik (`DB::transaction` + `lockForUpdate`) |
+| `GET` | `/api/v1/products/{id}/stock-logs` | Riwayat pergerakan stok untuk 1 produk (paginated) |
+| `GET` | `/api/v1/stock-logs` | Riwayat seluruh stok lintas produk. Filter: `?product_id=`, `?change_type=IN\|OUT\|OPNAME`, `?date_from=YYYY-MM-DD`, `?date_to=YYYY-MM-DD`, `?per_page=` |
+
+**Contoh Request `POST /api/v1/products/{id}/stock`:**
+```json
+{
+  "change_type": "IN",
+  "amount": 10,
+  "note": "Restok dari gudang belakang"
+}
+```
+> - `IN`: `amount >= 1`, menambah stok.
+> - `OUT`: `amount >= 1`, ditolak dengan **HTTP `422`** jika `amount > qty` saat ini.
+> - `OPNAME`: `amount >= 0`, menyetel stok sesuai hitungan fisik dan otomatis mengubah `needs_stock_check = false`.
+
+### 8.5. Integrasi Layanan AI (`ai_logs` — FastAPI)
+| Method | Endpoint | Keterangan |
+| :--- | :--- | :--- |
+| `POST` | `/api/v1/ai/classify` | Klasifikasi kategori ML via `AI_SERVICE_URL/classify`, mencocokkan dengan `categories`, dan menyimpan log ke `ai_logs` |
+| `POST` | `/api/v1/ai/generate-description` | Generate deskripsi via `AI_SERVICE_URL/generate-description`, simpan ke `ai_logs`, dan opsional langsung update `products.deskripsi` jika `apply_to_product: true` |
+| `GET` | `/api/v1/ai/logs` | Riwayat log AI. Filter: `?product_id=`, `?ai_type=CLASSIFICATION\|GEN_AI_DESCRIPTION`, `?per_page=` |
+
+**Contoh Request `POST /api/v1/ai/classify`:**
+```json
+{
+  "nama_barang": "LAMPU LED PHILIPS 12W",
+  "product_id": 1
+}
+```
+
+**Contoh Request `POST /api/v1/ai/generate-description`:**
+```json
+{
+  "nama_barang": "LAMPU LED PHILIPS 12W",
+  "kategori": "Bola Lampu",
+  "harga": 35000,
+  "satuan": "pcs",
+  "product_id": 1,
+  "apply_to_product": true
+}
+```
+> Jika service FastAPI sedang tidak aktif, API akan mengembalikan **HTTP `503 Service Unavailable`** dengan pesan JSON yang rapi.
+
+### 8.6. Autentikasi Opsional (`users` — Sanctum Bearer Token)
+| Method | Endpoint | Auth | Keterangan |
+| :--- | :--- | :---: | :--- |
+| `POST` | `/api/v1/auth/register` | Publik | Daftar akun (`name`, `username`, `email`, `password`, `password_confirmation`, `role`: `owner`\|`staff`) |
+| `POST` | `/api/v1/auth/login` | Publik | Login dengan `login` (bisa `email` atau `username`) dan `password` → mengembalikan Bearer `token` |
+| `GET` | `/api/v1/auth/me` | Bearer | Ambil profil user yang sedang login |
+| `POST` | `/api/v1/auth/logout` | Bearer | Revoke token aktif |
+
+---
+
+## 9. Integrasi Frontend (React + Vite & CORS)
+
+Konfigurasi CORS tersedia di `config/cors.php` dan secara default mengizinkan origin lokal Vite (`http://localhost:5173`, `http://127.0.0.1:5173`, `http://localhost:3000`, serta port localhost lainnya). Untuk production, set env:
+
+```env
+CORS_ALLOWED_ORIGINS=https://domain-frontend-anda.com
+```
+
+### Contoh Setup di React + Vite
+Tambahkan di `.env` project frontend:
+```env
+VITE_API_URL=http://127.0.0.1:8000/api/v1
+```
+
+Contoh pemanggilan API dengan `fetch`:
+```js
+const API_URL = import.meta.env.VITE_API_URL;
+
+export async function getProducts(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const res = await fetch(`${API_URL}/products?${query}`, {
+    headers: { Accept: 'application/json' },
+  });
+  if (!res.ok) throw await res.json();
+  return res.json();
+}
+```
+
+---
+
+## 10. Pengujian (Automated Testing)
+
+Proyek dilengkapi feature test lengkap di `tests/Feature/InventoryApiTest.php` (menggunakan SQLite in-memory sehingga aman tanpa menyentuh database lokal):
+
+```bash
+# Jalankan seluruh test API
+php artisan test
+
+# Lihat seluruh daftar route API
+php artisan route:list --path=api
 ```
